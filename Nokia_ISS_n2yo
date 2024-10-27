@@ -1,0 +1,122 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_PCD8544.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
+#include "secrets.h"
+
+// Nokia 5110 Display Pins
+#define CLK D1
+#define DIN D2
+#define DC  D5
+#define CE  D6
+#define RST D7
+
+Adafruit_PCD8544 display = Adafruit_PCD8544(CLK, DIN, DC, CE, RST);
+
+// Wi-Fi credentials
+// const char* ssid = "yourSSID";
+// const char* password = "yourPASSWORD";
+
+// N2YO API settings
+String apiKey = " "; //PUT YOUR API KEY FROM (N2YO.COM) HERE
+String satID = "25544";  // ISS Satellite ID (NORAD)
+
+const float myLat = -33.9249;
+const float myLon = 18.4241;
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize Display
+  display.begin();
+  display.setContrast(60);
+  display.setRotation(2);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.setCursor(0, 0);
+  display.println("ISS Tracker");
+  display.display();
+  delay(2000);
+
+  // Connect to Wi-Fi
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi");
+  
+  fetchISSData();
+}
+
+void fetchISSData() {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    HTTPClient http;
+    String url = "https://api.n2yo.com/rest/v1/satellite/positions/" + satID + "/" + String(myLat) + "/" + String(myLon) + "/0/1/&apiKey=" + apiKey;
+
+    http.begin(client, url);
+    int httpResponseCode = http.GET();
+
+    if (httpResponseCode > 0) {
+      String payload = http.getString();
+      Serial.println("HTTP Response Code: " + String(httpResponseCode));
+      Serial.println("Received Data: " + payload);
+
+      // Parse JSON response
+      StaticJsonDocument<1024> doc;
+      DeserializationError error = deserializeJson(doc, payload);
+
+      if (!error) {
+        float satLatitude = doc["positions"][0]["satlatitude"];
+        float satLongitude = doc["positions"][0]["satlongitude"];
+        float distance = calculateDistance(myLat, myLon, satLatitude, satLongitude);
+
+        // Display ISS data on the Nokia screen
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.println("ISS Tracker");
+        display.setCursor(0, 10);
+        display.print("Lat: ");
+        display.println(satLatitude, 4);
+        display.setCursor(0, 20);
+        display.print("Lon: ");
+        display.println(satLongitude, 4);
+        display.setCursor(0, 30);
+        display.print("Dist: ");
+        display.print(distance, 1);
+        display.println(" km");
+        display.display();
+
+      } else {
+        Serial.println("JSON Parsing failed");
+      }
+    } else {
+      Serial.print("Error on HTTP request: ");
+      Serial.println(httpResponseCode);
+    }
+    http.end();
+  }
+}
+
+// Calculate distance between coordinates in km
+float calculateDistance(float lat1, float lon1, float lat2, float lon2) {
+  const float R = 6371.0;
+  float dLat = radians(lat2 - lat1);
+  float dLon = radians(lon2 - lon1);
+  float a = sin(dLat / 2) * sin(dLat / 2) + cos(radians(lat1)) * cos(radians(lat2)) * sin(dLon / 2) * sin(dLon / 2);
+  float c = 2 * atan2(sqrt(a), sqrt(1 - a));
+  return R * c;
+}
+
+void loop() {
+  delay(10000);
+  fetchISSData();
+}
